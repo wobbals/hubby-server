@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
+import java.nio.channels.AsynchronousChannelGroup;
 import java.nio.channels.AsynchronousServerSocketChannel;
 import java.nio.channels.AsynchronousSocketChannel;
 import java.nio.channels.CompletionHandler;
@@ -31,19 +32,20 @@ public class HubbyServer {
     private ConcurrentHashMap<Long, ConcurrentLinkedQueue<Long>> hubs;
     private ConcurrentHashMap<Long, ConcurrentLinkedQueue<Runnable>> writeTasks;
     private ConcurrentHashMap<Long, Long> hubMemberships;
-    private InitialIncomingData initialIncomingDataHandler;
+    private IncomingData initialIncomingDataHandler;
     private OutgoingData outgoingDataHandler;
     
     public HubbyServer(InetAddress host, int port) throws IOException {
 	connectionSerial = new AtomicLong();
-	ssc = AsynchronousServerSocketChannel.open().bind(new InetSocketAddress(host, port));
+	AsynchronousChannelGroup channelGroup = AsynchronousChannelGroup.withThreadPool(Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors()));
+	ssc = AsynchronousServerSocketChannel.open(channelGroup).bind(new InetSocketAddress(host, port));
 	ssc.accept(connectionSerial.getAndIncrement(), new ServerSocketAccepted());
 	buffers = new ConcurrentHashMap<Long, BufferPair>();
 	channels = new ConcurrentHashMap<Long, AsynchronousSocketChannel>();
 	writeTasks = new ConcurrentHashMap<Long, ConcurrentLinkedQueue<Runnable>>();
 	hubs = new ConcurrentHashMap<Long, ConcurrentLinkedQueue<Long>>();
 	hubMemberships = new ConcurrentHashMap<Long, Long>();
-	initialIncomingDataHandler = new InitialIncomingData();
+	initialIncomingDataHandler = new IncomingData();
 	outgoingDataHandler = new OutgoingData();
     }
     
@@ -56,7 +58,7 @@ public class HubbyServer {
 
 	public void completed(final AsynchronousSocketChannel result, Long attachment) {
 	    ssc.accept(connectionSerial.getAndIncrement(), this);
-	    System.out.println(String.format("Socket connected. ID=%d",attachment));
+	    System.out.println(String.format("[server] Socket connected. ID=%d",attachment));
 	    channels.put(attachment, result);
 	    BufferPair bufferPair = new BufferPair();
 	    bufferPair.in = ByteBuffer.allocate(4096);
@@ -72,7 +74,7 @@ public class HubbyServer {
 	
     }
 
-    private class InitialIncomingData implements CompletionHandler<Integer, Long> {
+    private class IncomingData implements CompletionHandler<Integer, Long> {
 
 	public void completed(Integer result, Long attachment) {
 	    ByteBuffer buffer = buffers.get(attachment).in;
@@ -82,13 +84,14 @@ public class HubbyServer {
 	    if (!hubMemberships.containsKey(attachment) && result >= (Long.SIZE / 8)) {
 		//we have enough data to assign preamble
 		Long preamble = buffer.getLong();
-		System.out.println(String.format("%d is now a member of %d", attachment, preamble));
+		System.out.println(String.format("[server] %d is now a member of %d", attachment, preamble));
 		if (!hubs.containsKey(preamble)) {
 		    ConcurrentLinkedQueue<Long> channelIds = new ConcurrentLinkedQueue<Long>();
 		    hubs.put(preamble, channelIds);
 		}
 		hubs.get(preamble).offer(attachment);
 		hubMemberships.put(attachment, preamble);
+		result -= (Long.SIZE / 8);
 	    }
 	    
 	    if (buffer.hasRemaining() && buffer.position() > 0) {
@@ -101,9 +104,13 @@ public class HubbyServer {
 		buffer.limit(remaining);
 		buffer.position(0);
 		//send remaining to hub
-		enqueueHubWrites(buffer, attachment);
 	    }
 	    
+	    if (result > 0) {
+		enqueueHubWrites(buffer, attachment);
+		buffer.clear();
+	    }
+
 	    channel.read(buffer, attachment, this);
 	}
 
@@ -116,10 +123,10 @@ public class HubbyServer {
     private class OutgoingData implements CompletionHandler<Integer, Long> {
 
 	public void completed(Integer result, Long attachment) {
-	    System.out.println(String.format("%d successfully sent %d bytes", attachment, result));
+	    System.out.println(String.format("[server] %d successfully sent %d bytes", attachment, result));
 	    ConcurrentLinkedQueue<Runnable> queue = writeTasks.get(attachment);
 	    if (!queue.isEmpty()) {
-		System.out.println("Continuing down write queue");
+		System.out.println("[server] Continuing down write queue");
 		queue.poll().run();
 	    }
 	}
@@ -192,7 +199,7 @@ public class HubbyServer {
 		offerWriteTask(new EnqueueWriteTask(outChannel, channelID, outBuffer), channelID);
 	    }
 	}
-	System.out.println(String.format("Scheduled dissemination of %d bytes from connection %d to %d peers", buffer.limit(), fromChannelID, counter));
+	System.out.println(String.format("[server] Scheduled dissemination of %d bytes from connection %d to %d peers", buffer.limit(), fromChannelID, counter));
     }
 
 }

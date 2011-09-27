@@ -1,1 +1,3 @@
-An example application that produces pubsub-ish behavior. Note well that in high write conditions, this server will not distribute incoming data in contiguous chunks. It's really just a prototype, not fit for production.
+An example application server that produces pubsub-ish behavior and uses the spiffy AIO (NIO.2) library in Java 7. Note well that in high write conditions, this server will not distribute incoming data in contiguous chunks. It's really just a prototype, not fit for production.
+
+Open a socket to the server and send a long (8 byte) integer. All future incoming data to the server will be distributed to others who submitted the same long.

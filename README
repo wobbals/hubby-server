@@ -1,0 +1,1 @@
+An example application that produces pubsub-ish behavior. Note well that in high write conditions, this server will not distribute incoming data in contiguous chunks. It's really just a prototype, not fit for production.

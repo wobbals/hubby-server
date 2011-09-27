@@ -8,15 +8,13 @@ import java.nio.channels.AsynchronousChannelGroup;
 import java.nio.channels.AsynchronousServerSocketChannel;
 import java.nio.channels.AsynchronousSocketChannel;
 import java.nio.channels.CompletionHandler;
-import java.nio.channels.InterruptedByTimeoutException;
 import java.nio.channels.WritePendingException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+
+import org.apache.log4j.Logger;
 
 /**
  * Binds to a local port, accepts connections and groups them by the opening preamble.
@@ -35,10 +33,14 @@ public class HubbyServer {
     private IncomingData initialIncomingDataHandler;
     private OutgoingData outgoingDataHandler;
     
+    private static Logger logger = Logger.getLogger(HubbyServer.class);
+    
     public HubbyServer(InetAddress host, int port) throws IOException {
 	connectionSerial = new AtomicLong();
 	AsynchronousChannelGroup channelGroup = AsynchronousChannelGroup.withThreadPool(Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors()));
-	ssc = AsynchronousServerSocketChannel.open(channelGroup).bind(new InetSocketAddress(host, port));
+	InetSocketAddress addr = new InetSocketAddress(host, port);
+	logger.info(String.format("HubbyServer instance %d is binding to %s", hashCode(), addr.toString()));
+	ssc = AsynchronousServerSocketChannel.open(channelGroup).bind(addr);
 	ssc.accept(connectionSerial.getAndIncrement(), new ServerSocketAccepted());
 	buffers = new ConcurrentHashMap<Long, BufferPair>();
 	channels = new ConcurrentHashMap<Long, AsynchronousSocketChannel>();
@@ -58,7 +60,7 @@ public class HubbyServer {
 
 	public void completed(final AsynchronousSocketChannel result, Long attachment) {
 	    ssc.accept(connectionSerial.getAndIncrement(), this);
-	    System.out.println(String.format("[server] Socket connected. ID=%d",attachment));
+	    logger.debug(String.format("[server] Socket connected. ID=%d",attachment));
 	    channels.put(attachment, result);
 	    BufferPair bufferPair = new BufferPair();
 	    bufferPair.in = ByteBuffer.allocate(4096);
@@ -84,7 +86,7 @@ public class HubbyServer {
 	    if (!hubMemberships.containsKey(attachment) && result >= (Long.SIZE / 8)) {
 		//we have enough data to assign preamble
 		Long preamble = buffer.getLong();
-		System.out.println(String.format("[server] %d is now a member of %d", attachment, preamble));
+		logger.debug(String.format("[server] %d is now a member of %d", attachment, preamble));
 		if (!hubs.containsKey(preamble)) {
 		    ConcurrentLinkedQueue<Long> channelIds = new ConcurrentLinkedQueue<Long>();
 		    hubs.put(preamble, channelIds);
@@ -123,10 +125,10 @@ public class HubbyServer {
     private class OutgoingData implements CompletionHandler<Integer, Long> {
 
 	public void completed(Integer result, Long attachment) {
-	    System.out.println(String.format("[server] %d successfully sent %d bytes", attachment, result));
+	    logger.debug(String.format("[server] %d successfully sent %d bytes", attachment, result));
 	    ConcurrentLinkedQueue<Runnable> queue = writeTasks.get(attachment);
 	    if (!queue.isEmpty()) {
-		System.out.println("[server] Continuing down write queue");
+		logger.debug("[server] Continuing down write queue");
 		queue.poll().run();
 	    }
 	}
@@ -191,15 +193,14 @@ public class HubbyServer {
 	    if (channelID != fromChannelID) {
 		counter++;
 		AsynchronousSocketChannel outChannel = channels.get(channelID);
-		ByteBuffer outBuffer = buffers.get(channelID).out;
-		outBuffer.clear();
+		ByteBuffer outBuffer = ByteBuffer.allocate(buffer.limit());
 		buffer.rewind();
 		outBuffer.put(buffer);
 		outBuffer.flip();
 		offerWriteTask(new EnqueueWriteTask(outChannel, channelID, outBuffer), channelID);
 	    }
 	}
-	System.out.println(String.format("[server] Scheduled dissemination of %d bytes from connection %d to %d peers", buffer.limit(), fromChannelID, counter));
+	logger.debug(String.format("[server] Scheduled dissemination of %d bytes from connection %d to %d peers", buffer.limit(), fromChannelID, counter));
     }
 
 }

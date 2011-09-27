@@ -1,7 +1,6 @@
 package com.opentok.hubby;
 
 import java.io.IOException;
-import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.AsynchronousChannelGroup;
@@ -13,6 +12,8 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
+import org.apache.log4j.Logger;
+
 public class HubbyClient {
     private AsynchronousSocketChannel channel;
     private IncomingData incomingDataHandler;
@@ -22,6 +23,8 @@ public class HubbyClient {
     private OutgoingData outgoingDataHandler;
     private Long hubID;
     private Long clientID;
+    
+    private static Logger logger = Logger.getLogger(HubbyClient.class);
     
     private static AsynchronousChannelGroup channelGroup;
     
@@ -44,12 +47,14 @@ public class HubbyClient {
 	this.clientID = clientID;
 	
 	channel = AsynchronousSocketChannel.open(channelGroup);
-	Future<Void> connected = channel.connect(new InetSocketAddress(host, 26345));
+	InetSocketAddress addr = new InetSocketAddress(host, port);
+	logger.info(String.format("[client] client %d connecting to %s",clientID, addr.toString()));
+	Future<Void> connected = channel.connect(addr);
 	connected.get();
 	inBuffer.putLong(hubID);
 	inBuffer.flip();
 	channel.write(inBuffer).get();
-	System.out.println(String.format("[client] %d connected", clientID));
+	logger.info(String.format("[client] %d connected to %s", clientID, addr.toString()));
 	channel.read(inBuffer, null, incomingDataHandler);
     }
 
@@ -57,11 +62,11 @@ public class HubbyClient {
 
 	public void completed(Integer result, Void attachment) {
 	    if (result > 0) {
-		System.out.println(String.format("[client] %d received %d bytes of data.", clientID, result));
+		logger.debug(String.format("[client] %d received %d bytes of data.", clientID, result));
 		byte[] data = new byte[result];
 		inBuffer.flip();
 		inBuffer.get(data);
-		System.out.println(String.format("[client] data: %s", new String(data)));
+		logger.debug(String.format("[client] data: %s", new String(data)));
 	    }
 	    inBuffer.clear();
 	    channel.read(inBuffer, null, this);
@@ -77,9 +82,9 @@ public class HubbyClient {
     private class OutgoingData implements CompletionHandler<Integer, Void> {
 
 	public void completed(Integer result, Void attachment) {
-	    System.out.println(String.format("[client] %d sent %d bytes of data", clientID, result));
+	    logger.debug(String.format("[client] %d sent %d bytes of data", clientID, result));
 	    if (!writeQueue.isEmpty()) {
-		System.out.println("Continuing down write queue");
+		logger.debug("Continuing down write queue");
 		writeQueue.poll().run();
 	    }
 	}
@@ -109,9 +114,9 @@ public class HubbyClient {
 	buffer.flip();
 	try {
 	    channel.write(buffer, null, outgoingDataHandler);
-	    System.out.println("[client] Write submitted to channel");
+	    logger.debug("[client] Write submitted to channel");
 	} catch (WritePendingException e) {
-	    System.out.println("[client] Queueing incoming write");
+	    logger.debug("[client] Queueing incoming write");
 	    buffer.rewind();
 	    writeQueue.offer(new WriteTask(buffer));
 	}
